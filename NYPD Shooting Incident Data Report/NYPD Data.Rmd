@@ -1,0 +1,413 @@
+---
+title: "NYPD Shooting"
+author: "Ayush Jain"
+date: "2025-06-18"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# NYPD Shooting Incident Data Report
+
+This report analyzes NYPD Shooting Incident data from 2006 through 2024. The dataset is manually extracted and reviewed quarterly by the Office of Management Analysis and Planning, then published by the NYPD. Each record represents a shooting incident in New York City, including event, location, and demographic information about suspects and victims. The dataset offers valuable public insight into the patterns and risk factors associated with gun violence in New York City.
+
+Data Source - https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+
+## Library Imports
+
+```{r library, results='hide', warning=FALSE, message=FALSE}
+library(readr)
+library(tidyverse)
+library(party)
+library(caret)
+library(e1071) 
+```
+
+## Importing the data
+
+The data is read from a CSV file which is present in the same folder.
+
+```{r data load}
+file_path = 'NYPD_Shooting_Incident_Data__Historic_.csv'
+data <- read_csv(file_path)
+```
+Display the first 10 rows:
+
+```{r data view}
+head(data)
+```
+
+## Data Cleaning and Transformation
+
+The following steps remove unused columns, ensure proper data types, and create new variables such as crime year, weekday, and hour.
+
+
+```{r data cleaning}
+data = data %>%
+  select(-c(X_COORD_CD, Y_COORD_CD))
+
+data$BORO = as.factor(data$BORO)
+data$PERP_AGE_GROUP = as.factor(data$PERP_AGE_GROUP)
+data$PERP_SEX = as.factor(data$PERP_SEX)
+data$PERP_RACE = as.factor(data$PERP_RACE)
+data$VIC_AGE_GROUP = as.factor(data$VIC_AGE_GROUP)
+data$VIC_RACE = as.factor(data$VIC_RACE)
+data$VIC_SEX = as.factor(data$VIC_SEX)
+data$LOC_CLASSFCTN_DESC = as.factor(data$LOC_CLASSFCTN_DESC)
+
+data = data %>% 
+  mutate(OCCUR_HOUR=as.integer(format(strptime(OCCUR_TIME,"%H:%M:%S"),'%H')))
+
+data = data %>% 
+  mutate(OCCUR_DATE=as.Date(gsub('-', '/', OCCUR_DATE), format="%m/%d/%Y")) %>%
+  mutate(OCCUR_YEAR=as.integer(format(OCCUR_DATE,"%Y")))
+
+data$OCCUR_WEEKDAY = wday(data$OCCUR_DATE)
+```
+
+Summarize all columns:
+
+```{r data summary}
+summary(data)
+```
+## Visualization
+
+### Shooting Incidents by Day of Week
+
+The plot below shows the number of shooting incidents according to the day of the week. Incidents tend to be more frequent on weekends. Accordingly, Police Department can increase the patrolling on these days.
+
+```{r weekday plot}
+data %>%
+  group_by(OCCUR_WEEKDAY) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = as.factor(OCCUR_WEEKDAY), y = Total_Incidents, group = 1)) +
+  geom_line() +
+  geom_point() +
+  scale_y_log10() +
+  labs(
+    title = "Shooting Incidents by Day of Week",
+    x = "Day of Week (1 = Sunday, 7 = Saturday)",
+    y = "Number of Incidents (log scale)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+### Shooting Incidents by Hour
+
+The next plot shows incident frequency by hour of the day. Shootings are more common at night. Accordingly, Police Department can increase the patrolling on these time.
+
+```{r hour plot}
+data %>%
+  group_by(OCCUR_HOUR) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = OCCUR_HOUR, y = Total_Incidents)) +
+  geom_line() +
+  geom_point() +
+  geom_smooth() +
+  scale_y_log10() +
+  labs(
+    title = "Shooting Incidents by Hour",
+    x = "Hour of Day (0–23)",
+    y = "Number of Incidents (log scale)"
+  ) +
+  theme_minimal()
+```
+
+### Shooting Incidents by Year
+
+This time series shows the number of incidents each year, highlighting long-term trends.
+
+
+```{r year plot}
+data %>%
+  group_by(OCCUR_YEAR) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = OCCUR_YEAR, y = Total_Incidents)) +
+  geom_line() +
+  geom_point() +
+  geom_smooth() +
+  scale_y_log10() +
+  labs(
+    title = "Annual Shooting Incidents in NYC",
+    x = "Year",
+    y = "Number of Incidents (log scale)"
+  ) +
+  theme_minimal()
+```
+
+### Victim Age Group and Sex
+
+This bar plot shows the distribution of shooting victims by age group and sex. Males in the 25–44 age group are the most frequent victims. It is understandable as this age group usually spend most of their time outside at late hours and weekends.
+
+```{r victim age and sex plot}
+data %>% 
+  group_by(VIC_AGE_GROUP, VIC_SEX) %>%
+  summarise(total_cases = length(VIC_AGE_GROUP))
+
+data %>%
+  filter(!VIC_AGE_GROUP %in% c('1022', 'UNKNOWN', '(null)'),
+         !is.na(VIC_AGE_GROUP),
+         !is.null(VIC_SEX)) %>%
+  group_by(VIC_AGE_GROUP, VIC_SEX) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = VIC_AGE_GROUP, y = Total_Incidents, fill = VIC_SEX)) +
+  geom_col(width = 0.7) +
+  scale_fill_hue(c = 100, name = "Victim Sex") +
+  labs(
+    title = "Victim Age Group and Sex Distribution",
+    x = "Victim Age Group",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+### Victim Race
+
+This plot shows the count of victims by race. The distribution reflects broader social factors and demographic patterns.
+
+```{r victim race plot}
+data %>% 
+  group_by(VIC_RACE) %>%
+  summarise(total_cases = length(VIC_RACE))
+
+data %>%
+  filter(!VIC_RACE %in% c('UNKNOWN', '(null)'), !is.na(VIC_RACE)) %>%
+  group_by(VIC_RACE) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = reorder(VIC_RACE, Total_Incidents), y = Total_Incidents, fill = VIC_RACE)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_hue(c = 40, guide = FALSE) +
+  labs(
+    title = "Shooting Victims by Race",
+    x = "Victim Race",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal()
+```
+
+### Boroughs
+
+This bar plot shows the number of incidents by borough. Brooklyn has the highest count, while Staten Island has the lowest. The difference can be caused because of the average income in these areas.
+
+```{r boro plot}
+data %>% 
+  group_by(BORO) %>%
+  summarise(total_cases = length(BORO))
+
+data %>%
+  group_by(BORO) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = reorder(BORO, -Total_Incidents), y = Total_Incidents, fill = BORO)) +
+  geom_col() +
+  scale_fill_hue(c = 40, guide = FALSE) +
+  labs(
+    title = "Shooting Incidents by Borough",
+    x = "Borough",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal()
+```
+
+### Location Classification for Incidents
+
+This plot displays the location types with the frequency of shootings. Most number of cases are reported in street because of high population and minimum cameras. Small issues can go out of hand easily causing some gunfires. Parking lots report minimum number of issues as they are highly equipped with camera which can be risky for the perpetrator
+
+```{r location classification plot}
+data %>% 
+  group_by(LOC_CLASSFCTN_DESC) %>%
+  summarise(total_cases = length(LOC_CLASSFCTN_DESC))
+
+data %>%
+  filter(!LOC_CLASSFCTN_DESC %in% c('NA', '(null)'), !is.na(LOC_CLASSFCTN_DESC)) %>%
+  group_by(LOC_CLASSFCTN_DESC) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = reorder(LOC_CLASSFCTN_DESC, Total_Incidents), y = Total_Incidents, fill = LOC_CLASSFCTN_DESC)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_hue(c = 100, guide = FALSE) +
+  labs(
+    title = "Shooting Incidents by Location Classification",
+    x = "Location Type",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal()
+```
+
+### Perpetrator Age Group and Sex
+
+This bar plot explores suspect age and sex breakdown.The graph explains that males are the top perpetrator in NY and the age-group which does this the most are from 18-24. This age group is young and filled with a lot emotions which can sometimes become violent and can lead to shootings.
+
+```{r perp age and sex plot}
+data %>% 
+  group_by(PERP_AGE_GROUP, PERP_SEX) %>%
+  summarise(total_cases = length(PERP_AGE_GROUP))
+
+data %>%
+  filter(!PERP_AGE_GROUP %in% c('1020', '1028', '2021', '224', '940', 'UNKNOWN', '(null)'),
+         !is.na(PERP_AGE_GROUP),
+         !is.null(PERP_SEX)) %>%
+  group_by(PERP_AGE_GROUP, PERP_SEX) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = PERP_AGE_GROUP, y = Total_Incidents, fill = PERP_SEX)) +
+  geom_col(width = 0.7) +
+  scale_fill_hue(c = 100, name = "Perpetrator Sex") +
+  labs(
+    title = "Perpetrator Age Group and Sex Distribution",
+    x = "Perpetrator Age Group",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+### Perpetrator Race
+
+This plot shows perpetrators by race. The graph reflects that the most number of perpetrators are People with black race. The reason for this can be to prove dominance in the society where white people mostly take the decisions.
+
+```{r perp race plot}
+data %>% 
+  group_by(PERP_RACE) %>%
+  summarise(total_cases = length(PERP_RACE))
+
+data %>%
+  filter(!PERP_RACE %in% c('NA', '(null)'), !is.na(PERP_RACE)) %>%
+  group_by(PERP_RACE) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = reorder(PERP_RACE, Total_Incidents), y = Total_Incidents, fill = PERP_RACE)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_hue(c = 100, guide = FALSE) +
+  labs(
+    title = "Shooting Incidents by Perpetrator Race",
+    x = "Perpetrator Race",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal()
+```
+
+### Murder Rates
+
+The plot below compares incidents resulting in murder with total shootings. It help us identify that most of the shooting cases doesn't lead to murder. They could have been caused to scare someone or to prove dominance and power.
+
+```{r statistical murden flag plot}
+data %>% 
+  group_by(STATISTICAL_MURDER_FLAG) %>%
+  summarise(total_cases = length(STATISTICAL_MURDER_FLAG))
+
+data %>%
+  group_by(STATISTICAL_MURDER_FLAG) %>%
+  summarise(Total_Incidents = n()) %>%
+  ggplot(aes(x = STATISTICAL_MURDER_FLAG, y = Total_Incidents, fill = as.factor(STATISTICAL_MURDER_FLAG))) +
+  geom_col() +
+  scale_fill_hue(c = 40, guide = FALSE) +
+  labs(
+    title = "Proportion of Fatal (Murder) Shooting Incidents",
+    x = "Murder Flag (TRUE/FALSE)",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal()
+```
+
+## Predictive Modeling
+
+We use to model real world situations in mathematical models to predict the future things. There are a lot of different modelling techniques in the field of data science. For this report, we want to predict that the shootout lead to a murder or not therefore coming under the tree of classification model. 
+
+Only complete cases are used.
+Train/test splitting is omitted for simplicity.
+
+```{r model data}
+model_data = data %>%
+  filter(!is.na(BORO),
+         !is.na(LOC_CLASSFCTN_DESC),
+         !is.na(OCCUR_HOUR),
+         !is.na(OCCUR_YEAR),
+         !is.na(OCCUR_WEEKDAY),
+         !is.na(Latitude),
+         !is.na(Longitude))
+```
+
+### Logistic Regression
+
+The model is regression technique which is used for classification problems. We identify the list of columns which can affect our decision and provide it to the model for computation. 
+The model is created and output in predicted using the predict function.
+
+```{r model}
+model_glm = glm(STATISTICAL_MURDER_FLAG ~ BORO + LOC_CLASSFCTN_DESC + OCCUR_HOUR + OCCUR_YEAR + OCCUR_WEEKDAY + Latitude+Longitude, family="binomial", model_data)
+summary(model_glm)
+```
+
+The confusion matrix below shows model performance.
+The logistic regression model achieved an accuracy of approximately 79.65%.
+
+```{r prediction}
+predictTest = predict(model_glm, newdata = model_data, type = "response")
+
+table(model_data$STATISTICAL_MURDER_FLAG, predictTest >= 0.5)
+```
+```{r accuracy}
+
+(3210+17)/nrow(model_data)
+
+```
+
+```{r perfplot}
+
+fourfoldplot(table(model_data$STATISTICAL_MURDER_FLAG, predictTest >= 0.5),color=c("yellow","pink"), main = "Confusion Matrix Plot for Logistic Regression")
+text(-0.4,0.4, "TN", cex=1) + 
+text(0.4, -0.4, "TP", cex=1) + 
+text(0.4,0.4, "FN", cex=1) + 
+text(-0.4, -0.4, "FP", cex=1)
+```
+
+### Support Vector Machine
+
+The model is use for classification and regression problems. It works by dividing the data points into separate classes and maximize the margin between them. We provide the list of factor columns to the model for training purpose. 
+
+```{r svm}
+classifier <- svm(STATISTICAL_MURDER_FLAG ~ BORO + LOC_CLASSFCTN_DESC + OCCUR_HOUR + OCCUR_YEAR + OCCUR_WEEKDAY + Latitude+Longitude, 
+                  data = model_data, 
+                  type = 'C-classification', 
+                  kernel = 'radial', 
+                  gamma = 10)
+```
+
+The confusion matrix and accuracy are shown below.
+The SVM model achieved an accuracy of approximately 89.92%.
+
+```{r svm prediction}
+y_pred <- predict(classifier, newdata = model_data)
+
+table(model_data$STATISTICAL_MURDER_FLAG, y_pred)
+```
+
+```{r svm accuracy}
+(3220+423)/nrow(model_data)
+```
+
+```{r svm perf plot}
+fourfoldplot(table(model_data$STATISTICAL_MURDER_FLAG, y_pred),color=c("yellow","pink"), main = "Confusion Matrix Plot for SVM")
+text(-0.4,0.4, "TN", cex=1) + 
+text(0.4, -0.4, "TP", cex=1) + 
+text(0.4,0.4, "FN", cex=1) + 
+text(-0.4, -0.4, "FP", cex=1)
+```
+
+
+Based on these results, the Support Vector Machine model outperforms logistic regression in this instance.
+
+## Bias
+
+The dataset reflects higher numbers of Black suspects and victims. While this is a data-driven finding, it is important to recognize that such patterns may be influenced by a range of systemic factors, including reporting practices, policing strategies, and social determinants. Data interpretation should be undertaken with caution to avoid reinforcing societal bias or stigma. On an individual side, we might think women and old age people must be the biggest victims of this but that's not the cases from the analysis done as part of this report.
+ 
+Demographic analysis indicates young males (especially ages 18-24) are both the most frequent perpetrators of shootings. It can be expected because of bias on youth people as they are filled lot of emotions. They looks for societal acceptance and always want to prove dominance. Therefore, visualizing the data in an effective and efficient manner helps in eliminating any of the human and data bias and leads the project to a proper clean direction.
+
+## Conclusion
+
+This report provided an exploratory analysis of NYPD Shooting Incident data, including temporal, demographic, and geographic patterns. Predictive models were developed to identify risk factors for fatal shootings. The results can assist stakeholders in developing informed policy and intervention strategies, provided findings are interpreted within proper societal context and awareness of possible bias.
